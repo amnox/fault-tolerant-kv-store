@@ -6,6 +6,7 @@
  **********************************/
 
 #include "MP1Node.h"
+#include <typeinfo>
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
@@ -105,9 +106,9 @@ int MP1Node::initThisNode(Address *joinaddr) {
     // node is up!
 	memberNode->nnb = 0;
 	memberNode->heartbeat = 0;
-	memberNode->pingCounter = TFAIL;
+	memberNode->pingCounter = PINGTIME;
 	memberNode->timeOutCounter = -1;
-    initMemberListTable(memberNode);
+    initMemberListTable(memberNode, id, port);
 
     return 0;
 }
@@ -163,6 +164,8 @@ int MP1Node::finishUpThisNode(){
    /*
     * Your code goes here
     */
+    //cout<<"AMNOX finishUpThisNode"<<endl;
+    return 1;
 }
 
 /**
@@ -181,6 +184,7 @@ void MP1Node::nodeLoop() {
 
     // Wait until you're in the group...
     if( !memberNode->inGroup ) {
+        //cout<<"I am not in the group yet -"<<memberNode->addr.getAddress()<<" Time:"<<par->getcurrtime()<<"\n";
     	return;
     }
 
@@ -218,6 +222,156 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
 	/*
 	 * Your code goes here
 	 */
+    bool ret_value = false;
+    MessageHdr* incoming_message =(MessageHdr*) data;
+    char *message_content = data+sizeof(MessageHdr);
+    
+    //TO CHECK MEMBERSHIP TABLES OF NODES
+
+    //cout<<"MEMBERSHIP TABLE OF: "<< memberNode->addr.getAddress()<<endl;
+    /*for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
+
+        cout<<i->getid()<<endl;
+    }*/
+
+    size_t content_size = size - sizeof(MessageHdr);
+    //cout<<typeid(incoming_message->msgType).name()<<endl;
+    switch(incoming_message->msgType)
+    {
+
+        case JOINREQ  : 
+            //std::cout << "\n\n";
+            
+            ret_value = joinrequest(message_content, (int) content_size);
+            //std::cout << "CURRENT NODE: "<<memberNode->addr.getAddress()<<"\nMESSAGE TYPE: " << "JOIN REQUEST\n\n\n";
+            break;
+        case JOINREP: 
+            //std::cout << "\n\n";
+            ret_value = joinreply(message_content, (int) content_size);
+            //std::cout << "CURRENT NODE: "<<memberNode->addr.getAddress()<<"\nMESSAGE TYPE: " << "JOIN REPLY\n\n\n";
+            break;
+        case PING : 
+            //std::cout << "PING\n";
+            ret_value = ping_response(message_content, (int) content_size);
+            break;
+    }
+
+    return ret_value;
+
+}
+
+/**
+ * FUNCTION NAME: member_address
+ *
+ * DESCRIPTION: Helper function to get address of member list entry
+ */
+
+static Address member_address(MemberListEntry entry){
+    Address member_address;
+    memcpy(member_address.addr, &entry.id, sizeof(int));
+    memcpy(&member_address.addr[4], &entry.port, sizeof(short));
+    return member_address;
+}
+
+char* MP1Node::entry_to_byte_array(MemberListEntry& node, char* entry){   // [Address(6) | Hearbeat(long)]
+    
+    Address addr = member_address(node);
+    long heartbeat = node.getheartbeat();
+    
+    memcpy(entry, &addr, sizeof(Address));
+    memcpy(entry+sizeof(Address), &heartbeat, sizeof(long));
+
+    return entry;
+}
+
+MemberListEntry MP1Node::byte_array_to_entry(MemberListEntry& node, char* entry, long timestamp){   // [Address(6) | Hearbeat(long)]
+    
+    Address *addr = (Address*) entry;
+    int id;
+    short port;
+    long heartbeat;
+    memcpy(&id, addr->addr, sizeof(int));
+    memcpy(&port, &(addr->addr[4]), sizeof(short));
+    
+    memcpy(&heartbeat, entry+sizeof(Address), sizeof(long));
+    
+    node.setid(id);
+    node.setport(port);
+    node.setheartbeat(heartbeat);
+    node.settimestamp(timestamp);
+    
+    return node;
+}
+
+char *MP1Node::member_list_serialize(char *buffer) {
+    int index = 0;
+    int entry_size = sizeof(Address) + sizeof(long);
+    char *entry = (char*) malloc(entry_size);
+    
+    for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++, index += entry_size) {
+        entry_to_byte_array(*i, entry);
+        memcpy(buffer+index, entry, entry_size);
+    }
+    
+    free(entry);
+
+    return buffer;
+}
+
+vector<MemberListEntry> MP1Node::member_list_deserialize(char *table, int rows) {
+    vector<MemberListEntry> memberlist;
+    int entry_size = sizeof(Address) + sizeof(long);
+    MemberListEntry temp_entry;
+    
+    for (int r = 0; r < rows; ++r, table += entry_size) {
+        temp_entry = byte_array_to_entry(temp_entry, table, par->getcurrtime());
+        memberlist.push_back(MemberListEntry(temp_entry));
+    }
+
+    return memberlist;
+}
+
+/**
+ * FUNCTION NAME: send_pings
+ *
+ * DESCRIPTION: Send out pings to all nodes in the membersjip tableu
+ */
+
+bool MP1Node::send_pings(){
+    size_t size = sizeof(MessageHdr) + ((sizeof(Address) + sizeof(long))*memberNode->memberList.size());
+    MessageHdr *data = (MessageHdr *) malloc(size);
+    
+    data->msgType = PING;
+
+    member_list_serialize((char*)(data+1));
+    Address mem;  
+    for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin()+1; i != memberNode->memberList.end(); i++) {
+        
+        mem = member_address(*i);
+        emulNet->ENsend(&memberNode->addr, &mem, (char *) data, size);
+        
+    }
+    
+    free(data);
+    return true;
+}
+
+/**
+ * FUNCTION NAME: ping_response
+ *
+ * DESCRIPTION: Respond to the ping received from neighbours
+ */
+
+bool MP1Node::ping_response(char* data, int size){
+    int row_size = sizeof(Address) + sizeof(long);
+
+    vector<MemberListEntry> membership_list = member_list_deserialize(data, size/row_size);
+    
+    for (vector<MemberListEntry>::iterator i = membership_list.begin(); i != membership_list.end(); i++) {
+        refresh_membership_table(*i);
+    }
+
+    return true;
 }
 
 /**
@@ -233,6 +387,18 @@ void MP1Node::nodeLoopOps() {
 	 * Your code goes here
 	 */
 
+    if (memberNode->pingCounter == 0) {
+        //cout<< memberNode->addr.getAddress()<< " will ping! \n";
+        memberNode->heartbeat++;
+        memberNode->memberList[0].heartbeat++;
+        send_pings();
+        memberNode->pingCounter = PINGTIME;
+    }
+    else{ // wait until it's time to PING
+        //cout<< memberNode->addr.getAddress()<< " will not ping :( \n";
+        memberNode->pingCounter--;
+    }
+    remove_failed();
     return;
 }
 
@@ -260,14 +426,131 @@ Address MP1Node::getJoinAddress() {
     return joinaddr;
 }
 
+void MP1Node::remove_failed(){
+    Address peer;
+    for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin()+1; i != memberNode->memberList.end(); i++) {
+        
+        if (par->getcurrtime() - i->gettimestamp() > TREMOVE){ 
+            #ifdef DEBUGLOG
+            peer = member_address(*i);
+            log->logNodeRemove(&memberNode->addr, &peer);
+            #endif
+
+            memberNode->memberList.erase(i);
+            i--;
+
+            continue;
+        }
+        
+        if (par->getcurrtime() - i->gettimestamp() > TFAIL){ 
+            i->setheartbeat(-1); 
+        }
+    }
+}
+
 /**
  * FUNCTION NAME: initMemberListTable
  *
  * DESCRIPTION: Initialize the membership list
  */
-void MP1Node::initMemberListTable(Member *memberNode) {
-	memberNode->memberList.clear();
+void MP1Node::initMemberListTable(Member *memberNode, int id, int port) {
+    memberNode->memberList.clear();
+    MemberListEntry myself = MemberListEntry(id, port, memberNode->heartbeat, par->getcurrtime());
+    memberNode->memberList.push_back(myself);
 }
+
+/**
+ * FUNCTION NAME: joinrequest
+ *
+ * DESCRIPTION: Manage incoming join request
+ */
+
+bool MP1Node::joinrequest(char* data, int size){
+    Address* sender = (Address*) data;
+    //std::cout << "SENDER NODE: "<<sender->getAddress()<<endl;
+
+    size_t reply_size = sizeof(MessageHdr) + sizeof(Address) + sizeof(long)+1;
+    MessageHdr *reply_data = (MessageHdr *) malloc(reply_size);
+    reply_data->msgType = JOINREP;
+    memcpy((char*)(reply_data+1), & (memberNode->addr), sizeof(Address));
+    memcpy((char*)(reply_data+1) + sizeof(Address) + 1, &(memberNode->heartbeat), sizeof(long));
+    emulNet->ENsend(&memberNode->addr, sender, (char *) reply_data, reply_size);
+
+    free(reply_data);
+
+    refresh_membership_table(MemberListEntry(*((int *)sender->addr), *((short *)(sender->addr+4)), *((long *)(data+sizeof(Address)+1)), par->getcurrtime()));
+
+    return true;
+}
+
+/**
+ * FUNCTION NAME: joinreply
+ *
+ * DESCRIPTION: Send confirmation for join request.
+ */
+
+bool MP1Node::joinreply(char* data, int size){
+    Address* sender = (Address*) data;
+    //std::cout << "SENDER NODE: "<<sender->getAddress()<<endl;
+    memberNode->inGroup = true;
+    
+    refresh_membership_table(MemberListEntry(*(int*)(sender->addr),
+                                           *(short*)(sender->addr+4),
+                                           *(long*)(data+sizeof(Address)+1),
+                                           par->getcurrtime()));
+
+    
+    return true;
+}
+
+
+/**
+ * FUNCTION NAME: refresh_membership_table
+ *
+ * DESCRIPTION: Update node's membership table
+ */
+
+bool MP1Node::refresh_membership_table(MemberListEntry entry){
+    
+    long heartbeat = entry.getheartbeat();
+    Address address = member_address(entry);
+    //cout<<address.getAddress()<<endl;
+    for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
+        
+        if (member_address(*i) == address) { 
+            if (heartbeat == -1){ 
+                i->setheartbeat(-1);
+                return true;
+            }
+            if (i->getheartbeat() == -1){ 
+                return false;
+            }
+            if (i->getheartbeat() < heartbeat){ 
+                i->settimestamp(par->getcurrtime());
+                i->setheartbeat(heartbeat);
+                return true;
+            }
+            
+            
+            return false;
+        }
+
+    }
+
+    if (heartbeat == -1){
+        return false;
+    }
+    
+    memberNode->memberList.push_back(MemberListEntry(entry));
+    #ifdef DEBUGLOG
+        log->logNodeAdd(&(memberNode->addr), &address);
+    #endif
+    
+    
+    return true;
+}
+
+
 
 /**
  * FUNCTION NAME: printAddress
