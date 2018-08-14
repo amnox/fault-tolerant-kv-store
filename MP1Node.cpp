@@ -179,6 +179,15 @@ void MP1Node::nodeLoop() {
     	return;
     }
 
+    //check my membership table
+    /*
+    cout<<"Mem table of node: "<<memberNode->addr.getAddress()<<" => ";
+    for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
+        cout<<"'"<<i->getid()<<"', ";
+    }
+    cout<<"\n";
+    */
+   
     // Check my messages
     checkMessages();
 
@@ -422,7 +431,6 @@ Address MP1Node::getJoinAddress() {
     memset(&joinaddr, 0, sizeof(Address));
     *(int *)(&joinaddr.addr) = 1;
     *(short *)(&joinaddr.addr[4]) = 0;
-
     return joinaddr;
 }
 
