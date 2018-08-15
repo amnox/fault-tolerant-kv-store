@@ -45,18 +45,37 @@ void MP2Node::updateRing() {
 	 *  Step 1. Get the current membership list from Membership Protocol / MP1
 	 */
 	curMemList = getMembershipList();
-
+	
 	/*
 	 * Step 2: Construct the ring
 	 */
 	// Sort the list based on the hashCode
 	sort(curMemList.begin(), curMemList.end());
+	ring = curMemList;
 
+	/*for (vector<Node>::iterator i = curMemList.begin(); i != curMemList.end(); i++) {
+
+        cout<<i->getHashCode()<<endl;
+    }*/
+
+	vector<Node> diss;
+	diss = curMemList;
+	for (int i = 0; i<curMemList.size() ; i++){
+		//cout<<"Then: "<<diss.front().getHashCode()<<" Size: "<<diss.size()<<"\n";
+		vector<Node>::iterator it = diss.begin();
+		Node current = diss.front();
+		diss.erase(it);
+		diss.emplace_back(current);
+		//cout<<"Now: "<<diss.front().getHashCode()<<" Size: "<<diss.size()<<"\n";
+		
+	}
+	diss.clear();
 
 	/*
 	 * Step 3: Run the stabilization protocol IF REQUIRED
 	 */
 	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
+	
 }
 
 /**

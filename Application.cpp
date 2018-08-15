@@ -117,7 +117,7 @@ int Application::run()
 			mp2Run();
 		}
 		// Fail some nodes
-		//fail();
+		fail();
 	}
 
 	// Clean up

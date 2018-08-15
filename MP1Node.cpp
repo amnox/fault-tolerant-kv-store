@@ -181,13 +181,22 @@ void MP1Node::nodeLoop() {
 
     //check my membership table
     /*
+    if (memberNode->addr.addr[0]==2){
+        cout<<"Mem table of node: "<<memberNode->addr.getAddress()<<" => ";
+        for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
+            cout<<"'"<<i->getid()<<"', ";
+        }
+        cout<<"\n";
+    }
+
+    
     cout<<"Mem table of node: "<<memberNode->addr.getAddress()<<" => ";
     for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
         cout<<"'"<<i->getid()<<"', ";
     }
     cout<<"\n";
     */
-   
+
     // Check my messages
     checkMessages();
 
@@ -399,7 +408,7 @@ void MP1Node::nodeLoopOps() {
     if (memberNode->pingCounter == 0) {
         //cout<< memberNode->addr.getAddress()<< " will ping! \n";
         memberNode->heartbeat++;
-        memberNode->memberList[0].heartbeat++;
+        memberNode->memberList[0].heartbeat++; //increment own heartbeat
         send_pings();
         memberNode->pingCounter = PINGTIME;
     }
@@ -462,9 +471,11 @@ void MP1Node::remove_failed(){
  * DESCRIPTION: Initialize the membership list
  */
 void MP1Node::initMemberListTable(Member *memberNode, int id, int port) {
+    
     memberNode->memberList.clear();
     MemberListEntry myself = MemberListEntry(id, port, memberNode->heartbeat, par->getcurrtime());
     memberNode->memberList.push_back(myself);
+
 }
 
 /**
@@ -522,6 +533,7 @@ bool MP1Node::refresh_membership_table(MemberListEntry entry){
     
     long heartbeat = entry.getheartbeat();
     Address address = member_address(entry);
+
     //cout<<address.getAddress()<<endl;
     for (vector<MemberListEntry>::iterator i = memberNode->memberList.begin(); i != memberNode->memberList.end(); i++) {
         
