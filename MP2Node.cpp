@@ -67,8 +67,33 @@ void MP2Node::updateRing() {
 		diss.erase(it);
 		diss.emplace_back(current);
 		//cout<<"Now: "<<diss.front().getHashCode()<<" Size: "<<diss.size()<<"\n";
-		
+		if(current.nodeAddress.addr[0]== memberNode->addr.addr[0]){
+			cout<<"im inside"<<to_string(current.nodeAddress.addr[0])<<" ,AKA: "<<current.getHashCode()<<"\n";
+			if(hasMyReplicas.empty() || haveReplicasOf.empty()) {
+				hasMyReplicas.emplace_back(diss[0]);
+				hasMyReplicas.emplace_back(diss[1]);
+				haveReplicasOf.emplace_back(diss[diss.size()-2]);
+				haveReplicasOf.emplace_back(diss[diss.size()-3]);
+			} else if(hasMyReplicas[0].getHashCode() != diss[0].getHashCode() || hasMyReplicas[1].getHashCode()!=diss[1].getHashCode()){
+				// One of my replicas have failed
+			} else if (haveReplicasOf[0].getHashCode()!=diss[diss.size()-2].getHashCode()){
+				// My predecessor failed, time to be the primary of its keys!
+			}
+
+		}
 	}
+	/*cout<<"My Replicas live at: ";
+	for (vector<Node>::iterator i = hasMyReplicas.begin(); i != hasMyReplicas.end(); i++) {
+
+        cout<<i->getHashCode()<<", ";
+    }
+	cout<<"\n";
+	cout<<"I have: ";
+	for (vector<Node>::iterator i = haveReplicasOf.begin(); i != haveReplicasOf.end(); i++) {
+
+        cout<<i->getHashCode()<<", ";
+    }
+	cout<<"\n";*/
 	diss.clear();
 
 	/*
@@ -130,6 +155,8 @@ void MP2Node::clientCreate(string key, string value) {
 	/*
 	 * Implement this
 	 */
+	cout<<to_string(memberNode->addr.addr[0])<<endl;
+	cout<<hashFunction(key)<<endl;
 }
 
 /**
