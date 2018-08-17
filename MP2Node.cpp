@@ -8,6 +8,8 @@
 /**
  * constructor
  */
+
+
 MP2Node::MP2Node(Member *memberNode, Params *par, EmulNet * emulNet, Log * log, Address * address) {
 	this->memberNode = memberNode;
 	this->par = par;
@@ -55,9 +57,9 @@ void MP2Node::updateRing() {
 
 	/*for (vector<Node>::iterator i = curMemList.begin(); i != curMemList.end(); i++) {
 
-        cout<<i->getHashCode()<<endl;
-    }*/
-
+        cout<<i->getHashCode()<<", ";
+    }
+	cout<<"This was "<<to_string(memberNode->addr.addr[0])<<endl;*/
 	vector<Node> diss;
 	diss = curMemList;
 	for (int i = 0; i<curMemList.size() ; i++){
@@ -68,7 +70,7 @@ void MP2Node::updateRing() {
 		diss.emplace_back(current);
 		//cout<<"Now: "<<diss.front().getHashCode()<<" Size: "<<diss.size()<<"\n";
 		if(current.nodeAddress.addr[0]== memberNode->addr.addr[0]){
-			cout<<"im inside"<<to_string(current.nodeAddress.addr[0])<<" ,AKA: "<<current.getHashCode()<<"\n";
+			//cout<<"I'm inside "<<to_string(current.nodeAddress.addr[0])<<" ,AKA: "<<current.getHashCode()<<"\n";
 			if(hasMyReplicas.empty() || haveReplicasOf.empty()) {
 				hasMyReplicas.emplace_back(diss[0]);
 				hasMyReplicas.emplace_back(diss[1]);
@@ -155,8 +157,20 @@ void MP2Node::clientCreate(string key, string value) {
 	/*
 	 * Implement this
 	 */
-	cout<<to_string(memberNode->addr.addr[0])<<endl;
-	cout<<hashFunction(key)<<endl;
+	/*	cout<<"Incoming => {'"<<key<<"' : '"<<value<<"'}"<<g_transID<<endl;
+	cout<<"To be stored @: "<<keyReplicas[0].getHashCode()<<", "<<keyReplicas[1].getHashCode()<<", "<<keyReplicas[2].getHashCode()<<endl;
+	*/
+	vector<Node> keyReplicas = findNodes(key);
+
+	Message msg(g_transID++, this->memberNode->addr, MessageType::CREATE, key, value);
+
+	if (keyReplicas.size() == 3) {
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
+
+	}
+	
 }
 
 /**
@@ -172,6 +186,16 @@ void MP2Node::clientRead(string key){
 	/*
 	 * Implement this
 	 */
+	vector<Node> keyReplicas = findNodes(key);
+
+	Message msg(g_transID, this->memberNode->addr, MessageType::READ, key);
+
+	if (keyReplicas.size() == 3) {
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
+
+	}
 }
 
 /**
@@ -187,6 +211,17 @@ void MP2Node::clientUpdate(string key, string value){
 	/*
 	 * Implement this
 	 */
+
+	vector<Node> keyReplicas = findNodes(key);
+
+	Message msg(g_transID, this->memberNode->addr, MessageType::UPDATE, key, value);
+
+	if (keyReplicas.size() == 3) {
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
+
+	}
 }
 
 /**
@@ -202,6 +237,16 @@ void MP2Node::clientDelete(string key){
 	/*
 	 * Implement this
 	 */
+	vector<Node> keyReplicas = findNodes(key);
+
+	Message msg(g_transID, this->memberNode->addr, MessageType::DELETE, key);
+
+	if (keyReplicas.size() == 3) {
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
+
+	}
 }
 
 /**
@@ -217,6 +262,15 @@ bool MP2Node::createKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Insert key, value, replicaType into the hash table
+
+	this->ht->create(key, Entry(value, par->getcurrtime(), replica).convertToString());
+	vector<Node> replicas = findNodes(key);
+
+	if (replicas.size() == 3){
+		return true;
+	}
+
+	return false;
 }
 
 /**
@@ -298,6 +352,32 @@ void MP2Node::checkMessages() {
 		 * Handle the message types here
 		 */
 
+		Message msg(message);
+		//cout<<"Node: "<<to_string(memberNode->addr.addr[0])<<" Key: "<<msg.key<<endl;
+		switch (msg.type) {
+			case MessageType::CREATE:
+				handle_create_msg(msg);
+				break;
+			case MessageType::DELETE:
+				handle_delete_msg(msg);
+				break;
+			case MessageType::READ:
+				handle_read_msg(msg);
+				break;
+			case MessageType::UPDATE:
+				handle_update_msg(msg);
+				break;
+			case MessageType::REPLY:
+				handle_reply_msg(msg);
+				break;
+			case MessageType::READREPLY:
+				handle_readreply_msg(msg);
+				break;
+			default:
+				// TODO ERROR
+				break;
+		}
+
 	}
 
 	/*
@@ -374,4 +454,38 @@ void MP2Node::stabilizationProtocol() {
 	/*
 	 * Implement this
 	 */
+}
+
+void MP2Node::handle_create_msg(Message msg){
+	bool created  = createKeyValue(msg.key, msg.value, msg.replica);
+	if (created){
+		log->logCreateSuccess(&this->memberNode->addr, false, msg.transID, msg.key, msg.value);
+		Message reply(msg.transID, this->memberNode->addr, MessageType::REPLY, created);
+		this->emulNet->ENsend(&this->memberNode->addr, &msg.fromAddr, reply.toString());
+	}
+	else{
+		log->logCreateFail(&this->memberNode->addr, false, msg.transID, msg.key, msg.value);
+	}
+	
+}
+void MP2Node::handle_read_msg(Message msg){
+
+}
+void MP2Node::handle_update_msg(Message msg){
+
+}
+void MP2Node::handle_delete_msg(Message msg){
+
+}
+void MP2Node::handle_reply_msg(Message msg){
+	cout<<msg.type;
+	switch(msg.type){
+		case MessageType::CREATE:
+			log->logCreateSuccess(&this->memberNode->addr, true, msg.transID, msg.key, msg.value);
+			break;
+	}
+}
+
+void MP2Node::handle_readreply_msg(Message msg){
+
 }
