@@ -8,6 +8,23 @@
 /**
  * constructor
  */
+Transaction::Transaction(int id, int msgType,string key, string value, bool valid, int timeout,int replies): id(id), msgType(msgType), key(key),  value(value), valid(valid),timeout(timeout), replies(replies){}
+
+/**
+ * Copy constructor
+ */
+Transaction::Transaction(const Transaction &anotherMLE) {
+	this->id = anotherMLE.id;
+	this->msgType = anotherMLE.msgType;
+	this->key = anotherMLE.key;
+	this->value = anotherMLE.value;
+	this->valid = anotherMLE.valid;
+	this->timeout=anotherMLE.timeout;
+	this->replies=anotherMLE.replies;
+}
+
+Transaction::Transaction(){}
+
 
 
 MP2Node::MP2Node(Member *memberNode, Params *par, EmulNet * emulNet, Log * log, Address * address) {
@@ -102,7 +119,7 @@ void MP2Node::updateRing() {
 	 * Step 3: Run the stabilization protocol IF REQUIRED
 	 */
 	// Run stabilization protocol if the hash table size is greater than zero and if there has been a changed in the ring
-	
+	check_timeout();
 }
 
 /**
@@ -161,14 +178,15 @@ void MP2Node::clientCreate(string key, string value) {
 	cout<<"To be stored @: "<<keyReplicas[0].getHashCode()<<", "<<keyReplicas[1].getHashCode()<<", "<<keyReplicas[2].getHashCode()<<endl;
 	*/
 	vector<Node> keyReplicas = findNodes(key);
-
-	Message msg(g_transID++, this->memberNode->addr, MessageType::CREATE, key, value);
-
+	Transaction new_create_trans(g_transID,MessageType::CREATE,key,value, true,0,0);
+	Message msg(new_create_trans.id, this->memberNode->addr, MessageType::CREATE, key, value);
+	
 	if (keyReplicas.size() == 3) {
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
-
+		transactions.emplace_back(new_create_trans);
+		g_transID++;
 	}
 	
 }
@@ -187,15 +205,19 @@ void MP2Node::clientRead(string key){
 	 * Implement this
 	 */
 	vector<Node> keyReplicas = findNodes(key);
-
+	
+	Transaction new_read_trans(g_transID,MessageType::READ,key,"READ", true, this->par->globaltime,0);
+	new_read_trans.timeout=this->par->globaltime;
 	Message msg(g_transID, this->memberNode->addr, MessageType::READ, key);
 
 	if (keyReplicas.size() == 3) {
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
-
+		g_transID++;
+		transactions.emplace_back(new_read_trans);
 	}
+	
 }
 
 /**
@@ -238,14 +260,15 @@ void MP2Node::clientDelete(string key){
 	 * Implement this
 	 */
 	vector<Node> keyReplicas = findNodes(key);
-
+	Transaction new_delete_trans(g_transID,MessageType::DELETE,key,"DELETE", true, 0,0);
 	Message msg(g_transID, this->memberNode->addr, MessageType::DELETE, key);
 
 	if (keyReplicas.size() == 3) {
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
-
+		transactions.emplace_back(new_delete_trans);
+		g_transID++;
 	}
 }
 
@@ -286,6 +309,12 @@ string MP2Node::readKey(string key) {
 	 * Implement this
 	 */
 	// Read key from local hash table and return value
+	string entryStr = this->ht->read(key);
+	if (!entryStr.empty()){
+		return Entry(entryStr).value;
+	}
+
+	return entryStr;
 }
 
 /**
@@ -316,6 +345,8 @@ bool MP2Node::deletekey(string key) {
 	 * Implement this
 	 */
 	// Delete the key from the local hash table
+
+	return ht->deleteKey(key);
 }
 
 /**
@@ -469,23 +500,109 @@ void MP2Node::handle_create_msg(Message msg){
 	
 }
 void MP2Node::handle_read_msg(Message msg){
-
+	string returned_value = readKey(msg.key);
+	if (!returned_value.empty()){
+		log->logReadSuccess(&this->memberNode->addr, false, msg.transID, msg.key,returned_value);
+		Message reply(msg.transID, this->memberNode->addr, returned_value);
+		this->emulNet->ENsend(&this->memberNode->addr, &msg.fromAddr, reply.toString());
+	} else {
+		log->logReadFail(&this->memberNode->addr, false, msg.transID, msg.key);
+	}
 }
 void MP2Node::handle_update_msg(Message msg){
 
 }
 void MP2Node::handle_delete_msg(Message msg){
+	bool deleted = deletekey(msg.key);
+	if (deleted){
+		log->logDeleteSuccess(&this->memberNode->addr, false, msg.transID, msg.key);
+	} else{
+		log->logDeleteFail(&this->memberNode->addr, false, msg.transID, msg.key);
+	}
 
+	Message reply(msg.transID, this->memberNode->addr, MessageType::REPLY, deleted);
+	this->emulNet->ENsend(&this->memberNode->addr, &msg.fromAddr, reply.toString());
 }
 void MP2Node::handle_reply_msg(Message msg){
-	cout<<msg.type;
-	switch(msg.type){
-		case MessageType::CREATE:
-			log->logCreateSuccess(&this->memberNode->addr, true, msg.transID, msg.key, msg.value);
+	Transaction current_transaction;
+	
+	for(vector<Transaction>::iterator i = transactions.begin(); i != transactions.end(); i++){
+		if(msg.transID==i->id){
+			//cout<<i->key;
+			current_transaction.id = i->id;
+			current_transaction.msgType = i->msgType;
+			current_transaction.key = i->key;
+			current_transaction.value = i->value;
+			current_transaction.valid = i->valid;
+			i->valid=false;
 			break;
+		}
+	}
+	
+	switch(current_transaction.msgType){
+		case MessageType::CREATE:
+			if(current_transaction.valid){
+				log->logCreateSuccess(&this->memberNode->addr, true, msg.transID, current_transaction.key, current_transaction.value);
+			}
+			
+			break;
+		case MessageType::DELETE:
+			if(current_transaction.valid && msg.success){
+				log->logDeleteSuccess(&this->memberNode->addr, true, msg.transID, current_transaction.key);
+			} else if(!msg.success && current_transaction.valid){
+				
+				log->logDeleteFail(&this->memberNode->addr, true, msg.transID, current_transaction.key);
+			}
+			
+			break;
+		
 	}
 }
 
 void MP2Node::handle_readreply_msg(Message msg){
+	Transaction current_transaction;
+	string returned_value = msg.value;
 
+	for(vector<Transaction>::iterator i = transactions.begin(); i != transactions.end(); i++){
+		if(msg.transID==i->id){
+			//cout<<i->key;
+			current_transaction.id = i->id;
+			current_transaction.msgType = i->msgType;
+			current_transaction.key = i->key;
+			current_transaction.value = i->value;
+			current_transaction.valid = i->valid;
+			current_transaction.replies=++i->replies;
+			i->value=returned_value;
+			if(current_transaction.replies>=2){
+				i->valid=false;
+			}
+			break;
+		}
+	}
+	//cout<<"Transaction: "<<current_transaction.id<<" Reply no: "<<current_transaction.replies<<" Truth:"<<(current_transaction.valid && !returned_value.empty() && current_transaction.replies>=2)<<endl;
+	if(current_transaction.valid && !returned_value.empty() && current_transaction.replies>=2){
+		log->logReadSuccess(&this->memberNode->addr, true, msg.transID, current_transaction.key, returned_value);
+	} else if(returned_value.empty() && current_transaction.valid){
+		
+		log->logReadFail(&this->memberNode->addr, true, msg.transID, msg.key);
+	}
+
+
+	//log->logReadSuccess(&this->memberNode->addr, true, msg.transID, current_transaction.key, returned_value);
+	//log->logReadFail(&this->memberNode->addr, true, msg.transID, msg.key);
+}
+
+void MP2Node::check_timeout(){
+	for(vector<Transaction>::iterator i = this->transactions.begin(); i != this->transactions.end(); i++){
+		switch(i->msgType){
+			case MessageType::READ:
+				if(par->globaltime-i->timeout>TIMEOUT && i->valid){
+					//cout<<"time to retire:"<<i->id<<" Diff: "<<this->par->globaltime-i->timeout<<endl;
+					i->valid=false;
+					log->logReadFail(&this->memberNode->addr, true, i->id, i->key);
+				}
+				
+				break;
+		}
+	}
 }

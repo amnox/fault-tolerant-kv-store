@@ -6,7 +6,7 @@
 
 #ifndef MP2NODE_H_
 #define MP2NODE_H_
-
+#define TIMEOUT 2
 /**
  * Header files
  */
@@ -18,6 +18,21 @@
 #include "Params.h"
 #include "Message.h"
 #include "Queue.h"
+
+class Transaction {
+	public:
+		int id;
+		int msgType;
+		string key;
+		string value;
+		bool valid;
+		int timeout;
+		int replies;
+
+		Transaction(int id, int msgType,string key, string value, bool valid,int timeout,int replies);
+		Transaction();
+		Transaction(const Transaction &anotherMLE);
+};
 
 
 
@@ -49,6 +64,8 @@ private:
 	EmulNet * emulNet;
 	// Object of Log
 	Log * log;
+
+	vector<Transaction> transactions;
 
 	// Message handlers
 	void handle_create_msg(Message msg);
@@ -99,6 +116,8 @@ public:
 
 	// stabilization protocol - handle multiple failures
 	void stabilizationProtocol();
+
+	void check_timeout();
 
 	~MP2Node();
 };
