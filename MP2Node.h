@@ -74,6 +74,7 @@ private:
 	void handle_delete_msg(Message msg);
 	void handle_reply_msg(Message msg);
 	void handle_readreply_msg(Message msg);
+	void handle_updatereply_msg(Message msg);
 	
 
 public:
@@ -118,6 +119,8 @@ public:
 	void stabilizationProtocol();
 
 	void check_timeout();
+
+	void refresh_replicas(vector<Node> new_replicas);
 
 	~MP2Node();
 };

@@ -95,6 +95,10 @@ void MP2Node::updateRing() {
 				haveReplicasOf.emplace_back(diss[diss.size()-3]);
 			} else if(hasMyReplicas[0].getHashCode() != diss[0].getHashCode() || hasMyReplicas[1].getHashCode()!=diss[1].getHashCode()){
 				// One of my replicas have failed
+				vector<Node> new_replicas;
+				new_replicas.emplace_back(diss[0]);
+				new_replicas.emplace_back(diss[1]);
+				refresh_replicas(new_replicas);
 			} else if (haveReplicasOf[0].getHashCode()!=diss[diss.size()-2].getHashCode()){
 				// My predecessor failed, time to be the primary of its keys!
 			}
@@ -182,8 +186,11 @@ void MP2Node::clientCreate(string key, string value) {
 	Message msg(new_create_trans.id, this->memberNode->addr, MessageType::CREATE, key, value);
 	
 	if (keyReplicas.size() == 3) {
+		msg.replica=ReplicaType::PRIMARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		msg.replica=ReplicaType::SECONDARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		msg.replica=ReplicaType::TERTIARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
 		transactions.emplace_back(new_create_trans);
 		g_transID++;
@@ -235,14 +242,18 @@ void MP2Node::clientUpdate(string key, string value){
 	 */
 
 	vector<Node> keyReplicas = findNodes(key);
-
+	Transaction new_update_transaction(g_transID, MessageType::UPDATE, key, value,1, this->par->globaltime, 0);
 	Message msg(g_transID, this->memberNode->addr, MessageType::UPDATE, key, value);
 
 	if (keyReplicas.size() == 3) {
+		msg.replica=ReplicaType::PRIMARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		msg.replica=ReplicaType::SECONDARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		msg.replica=ReplicaType::TERTIARY;
 		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[2].getAddress(), msg.toString());
-
+		transactions.emplace_back(new_update_transaction);
+		g_transID++;
 	}
 }
 
@@ -330,6 +341,8 @@ bool MP2Node::updateKeyValue(string key, string value, ReplicaType replica) {
 	 * Implement this
 	 */
 	// Update key in local hash table and return true or false
+
+	return this->ht->update(key, Entry(value, par->getcurrtime(), replica).convertToString());
 }
 
 /**
@@ -510,7 +523,15 @@ void MP2Node::handle_read_msg(Message msg){
 	}
 }
 void MP2Node::handle_update_msg(Message msg){
+	bool updated = updateKeyValue(msg.key,msg.value,msg.replica);
+	if(updated){
+		log->logUpdateSuccess(&this->memberNode->addr,false,msg.transID,msg.key,msg.value);
+	} else {
+		log->logUpdateFail(&this->memberNode->addr,false,msg.transID,msg.key,msg.value);
+	}
 
+	Message reply(msg.transID, this->memberNode->addr, MessageType::REPLY,updated);
+	this->emulNet->ENsend(&this->memberNode->addr, &msg.fromAddr, reply.toString());
 }
 void MP2Node::handle_delete_msg(Message msg){
 	bool deleted = deletekey(msg.key);
@@ -534,7 +555,10 @@ void MP2Node::handle_reply_msg(Message msg){
 			current_transaction.key = i->key;
 			current_transaction.value = i->value;
 			current_transaction.valid = i->valid;
-			i->valid=false;
+			if(i->msgType!=MessageType::UPDATE){
+				i->valid=false;
+			}
+			
 			break;
 		}
 	}
@@ -555,8 +579,23 @@ void MP2Node::handle_reply_msg(Message msg){
 			}
 			
 			break;
-		
+		case MessageType::UPDATE:
+			handle_updatereply_msg(msg);
 	}
+}
+
+void MP2Node::handle_updatereply_msg(Message msg){
+	for(vector<Transaction>::iterator i = transactions.begin(); i != transactions.end(); i++){
+		if(msg.transID==i->id){
+			if(msg.success){
+				++i->replies;
+				//cout<<i->id<<" Key: "<<i->key<<" Value: "<<i->value<<" valid:"<<(bool)i->valid<<endl;
+			}
+
+			break;
+		}
+	}
+	
 }
 
 void MP2Node::handle_readreply_msg(Message msg){
@@ -603,6 +642,67 @@ void MP2Node::check_timeout(){
 				}
 				
 				break;
+			case MessageType::UPDATE:
+				//cout<<((this->par->globaltime-i->timeout)<=TIMEOUT) <<" Valid: "<< i->valid<<" "<< i->replies;
+				//cout<<" we won "<<i->id<<endl;
+				cout<<" Less than to " <<((this->par->globaltime-i->timeout)>TIMEOUT+1) <<" Vaild: "<< i->valid <<" Less than 2 reply: "<< (i->replies<2);
+				cout<<endl;
+				if(((this->par->globaltime-i->timeout)<=TIMEOUT+1) && i->valid && i->replies>1){
+					//cout<<"we won "<<i->id<<endl;
+					log->logUpdateSuccess(&this->memberNode->addr,true,i->id,i->key,i->value);
+					i->valid=false;
+				} else if(((this->par->globaltime-i->timeout)>TIMEOUT+1) && i->valid && i->replies<2) {
+					log->logUpdateFail(&this->memberNode->addr,true,i->id,i->key,i->value);
+					i->valid=false;
+				}
+				break;
 		}
 	}
 }
+
+void MP2Node::refresh_replicas(vector<Node> new_replicas){
+	//for(vector<>)
+	std::map<string,string> my_keys;
+
+	//collect all keys of which I'm PRIMARY
+	for (std::map<string,string>::iterator it=this->ht->hashTable.begin(); it!=this->ht->hashTable.end(); ++it){
+		if(Entry(it->second).replica==ReplicaType::PRIMARY){
+			//cout<<"First: "<<it->first<<" Second: "<<Entry(it->second).replica<<" "<<ReplicaType::SECONDARY<<endl;
+			my_keys.insert(pair<string, string>(it->first, it->second));
+		}
+	}
+
+	//Delete from old replicas to prevent overreplication
+	for(int i=0;i<new_replicas.size();i++){
+		
+		for (std::map<string,string>::iterator it=my_keys.begin(); it!=my_keys.end(); ++it){
+			Transaction new_delete_trans(g_transID,MessageType::DELETE,it->first,"DELETE", true, 0,0);
+			Message msg(g_transID, this->memberNode->addr, MessageType::DELETE, it->first);
+
+			this->emulNet->ENsend(&this->memberNode->addr, hasMyReplicas[0].getAddress(), msg.toString());
+			this->emulNet->ENsend(&this->memberNode->addr, hasMyReplicas[1].getAddress(), msg.toString());
+			transactions.emplace_back(new_delete_trans);
+			g_transID++;
+
+		}
+	}
+	this->hasMyReplicas = new_replicas;
+
+	//Store in new replicas
+	for (std::map<string,string>::iterator it=my_keys.begin(); it!=my_keys.end(); ++it){
+		string key = it->first;
+		string value = Entry(it->second).value;
+		vector<Node> keyReplicas = this->hasMyReplicas;
+		Transaction new_create_trans(g_transID,MessageType::CREATE,key,value, true,0,0);
+		Message msg(new_create_trans.id, this->memberNode->addr, MessageType::CREATE, key, value);
+
+		msg.replica=ReplicaType::SECONDARY;
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[0].getAddress(), msg.toString());
+		msg.replica=ReplicaType::TERTIARY;
+		this->emulNet->ENsend(&this->memberNode->addr, keyReplicas[1].getAddress(), msg.toString());
+		transactions.emplace_back(new_create_trans);
+		g_transID++;
+	}
+	
+}
+
